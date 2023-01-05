@@ -1,0 +1,104 @@
+// ==================================================================================
+//mangrove extent mapping for Thailand
+//developed by: Santosh Dhungana
+
+// ===========================================================================================
+
+// ===================Setting up the map============================================//
+
+ //center the map to the region of interest using the outlined geometry
+ Map.centerObject(geometry,11);
+ Map.setOptions('satellite');
+ 
+// ====================== select and filter landsat composite=====================//
+
+//2.1 cloud masking
+// landsat data includes the pixel_qa band whch can be used to create cloud mask
+// BIts 3 and 5 are cloud shadow and cloud, respectively
+function cloudMask(image){
+  var cloudshadow = ee.Number(2).pow(3).int(); //cast type to integer
+  var clouds= ee.Number(2).pow(5).int();
+  
+  // get pixel QA band
+  var qa = image.select('pixel_qa');
+  
+  // flag both cloudshadow and cloud and set them to zero for clear conditions
+  var mask = qa.bitwiseAnd(cloudshadow).eq(0).and(qa.bitwiseAnd(clouds).eq(0));
+  
+  //return masked image and slace the image between 0 and 1
+  
+  return image.updateMask(mask).divide(10000).copyProperties(image,['system:time_start']);
+  
+}
+
+//2.2 Add different spectral indices for mangrove mapping using landsat 8 imagery
+var addindicesL8= function(img){
+  // calculate NDVI
+  var ndvi = img.normalizedDifference(['B5','B4']).rename('NDVI');
+  // NDMI (Normalized Difference Mangrove Index - Shi et al 2016 - New spectral metrics for mangrove forest identification)
+  var ndmi = img.normalizedDifference(['B7','B3']).rename('NDMI');
+  // MNDWI (Modified Normalized Difference Water Index - Hanqiu Xu, 2006)
+  var mndwi = img.normalizedDifference(['B3','B6']).rename('MNDWI');
+  //SR (simple ratio)
+  var sr=img.select('B5').divide(img.select('B4')).rename('SR');
+  // GCVI
+  var gcvi = img.expression('(NIR/GREEN)-1',{
+    'NIR':img.select('B5'),
+    'GREEN':img.select('B3')
+  }).rename('GCVI');
+  
+  return img
+  .addBands(ndvi)
+  .addBands(ndmi)
+  .addBands(mndwi)
+  .addBands(sr)
+  .addBands(gcvi);
+  
+};
+
+//2.3 filter the landsat 8 images by date and region
+
+//temporal parameters
+var year = 2019;
+var offsetyears=1;
+var startDate = (year-offsetyears)+'-01-01';
+var endDate = (year+offsetyears)+'-12-31';
+
+//apply temporal filters,  above defined cloud mask and add indices to the image collection
+var l8 = L8.filterDate(startDate, endDate)
+            .map(cloudMask)
+            .map(addindicesL8);
+
+
+//composite the collection (either perpixel basis, per band basis using median()
+// or composite with qualityMosaic('NDVI')
+
+var composite=l8.median()
+                .clip(geometry);
+                
+// dispaly on map
+Map.addLayer(composite,{min:0, max:0.3, bands:['B4','B3','B2']}, 'True color composite');
+
+//Apply the elevation mask and manngroveindices and water indices to highlight mangrove area
+
+var dem = DEM.clip(geometry);
+
+// mangrove are usually present at lower elevation sea-shore (set elevation less than 65 m )
+var elevationMask = (dem.lte(65));
+
+// apply NDVI and MNDWI bads to crete mask to exclude others
+var ndviMask= composite.select('NDVI').gt(0.25);
+var mndwiMask= composite.select('MNDWI').gt(-0.5);
+
+//apply masks to the composite
+var newComposite = composite
+                      .updateMask(elevationMask)
+                      .updateMask(ndviMask)
+                      .updateMask(mndwiMask);
+
+//Add map to the display
+
+Map.addLayer(newComposite, {min:0, max:0.35, bands:['B5','B6','B4']},'Landsat composite 2019');     
+     
+
+

@@ -1,0 +1,1 @@
+Contains Google Earth Engine Codes that map mangrove extent. Also, contains tool that maps mangrove extent in the selected regions for the year 2000, 2010, and 2020 using a Random Forest Classification derived from Landsat imagery. Use the tools below to explore changes in mangrove extent, mangrove canopy height in 2000, and drivers of mangrove loss.

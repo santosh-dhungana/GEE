@@ -1,0 +1,158 @@
+// Get Landsat 5 collections. 
+
+var preset = {
+  Landsat5: "LANDSAT/LT05/C01/T1_TOA",
+  date_from:"2000-01-01",
+  date_to:"2000-12-31",
+  bands:['B7','B5','B4','B3', 'B2', 'B1'],
+  classificationBands:['B1', 'B2', 'B3', 'B4', 'B5'],
+  areaCalculatedBands:['B1', 'B2', 'B3', 'B4', 'B5', 'B7'],
+    amp_threshold: 0.1,
+    amp_multiplier: 5,
+    studyArea: Cambodia,//StudyArea,
+    cloud_thresh: 95
+};
+
+var new_ = StudyArea.filterBounds(Cambodia);
+Map.addLayer(new_,{},"new");
+
+
+var L5_collection = ee.ImageCollection(preset.Landsat5);
+
+// Filter to scenes that intersect your boundary
+var L5_collection = L5_collection.filterBounds(preset.studyArea);
+
+// Filter to scenes for a given time period
+var L5_SR_2000 = L5_collection.filterDate(preset.date_from, preset.date_to);
+print(L5_SR_2000, 'Image 2000'); 
+
+// select the map zoom level 
+Map.setCenter(103.05,11.49,6);
+  
+ function cloudfunction(image)
+{
+    var CloudScore = ee.Algorithms.Landsat.simpleCloudScore(image);
+    var quality = CloudScore.select('cloud');
+    var cloud01 = quality.gt(preset.cloud_thresh);
+    var cloudmask = image.mask().and(cloud01.not());
+    return image.mask(cloudmask);
+}
+
+// Filter the collection during the LSP season 
+
+var imageC = ee.ImageCollection(preset.Landsat5)
+    .filterDate(preset.date_from, preset.date_to)
+    //.filterBounds(config.studyArea)
+    .map(cloudfunction)
+    .median()
+    .clip(preset.studyArea);
+
+var img = imageC;
+
+Map.addLayer(imageC, {bands: ["B4","B3", "B2"]}, 'Raw Image', false);
+
+
+//Create EVI
+
+var evi = img.expression(
+    '2.5 * ((NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1))', {
+      'NIR': img.select('B4'),
+      'RED': img.select('B3'),
+      'BLUE': img.select('B1')
+});
+
+Map.addLayer(evi, {min: -1, max: 1}, 'EVI',false);
+
+var NDVI = img.normalizedDifference (['B4', 'B3']);
+Map.addLayer(NDVI,{min: -1, max:1}, 'NDVI',false );
+
+
+// Add clipped image for the classification
+
+ var image = ee.Image(img);
+// Classify the image
+
+      var trainingFeatures = Mangroves.merge(water).merge(Other_vegetation).merge(urban).merge(cultivated_land).merge(baren);
+      print(trainingFeatures);
+      
+            var bands = preset.classificationBands;
+      
+            var training = image.select(bands).sampleRegions({
+        collection: trainingFeatures, 
+        properties: ['landcover'], 
+       scale: 30
+      });
+       print(training) ;
+      
+      var classifier = ee.Classifier.smileCart().train({
+       features: training, 
+       classProperty: 'landcover', 
+      inputProperties: bands
+      });
+      print(classifier.explain());
+      
+      var classified = image.select(bands).classify(classifier);
+      
+
+      // 4.	Accuracy Assessment
+      
+      var trainingFeatures = training.randomColumn();
+      var trainingSet = training
+      .filter(ee.Filter.lessThan('random', 0.6));
+      var testingSet = trainingFeatures
+      .filter(ee.Filter.greaterThanOrEquals('random', 0.6));
+      
+      var training = ee.Classifier.smileCart().train({
+        features:training, 
+        classProperty: 'landcover', 
+        inputProperties: (bands)
+      });
+       
+      var confusionMatrix = ee.ConfusionMatrix(testingSet.classify(training)
+          .errorMatrix({
+            actual: 'landcover', 
+            predicted: 'classification'
+          }));
+      
+      print('Confusion matrix:', confusionMatrix);
+      print('Overall Accuracy:', confusionMatrix.accuracy());
+      print('Producers Accuracy:', confusionMatrix.producersAccuracy());
+      print('Consumers Accuracy:', confusionMatrix.consumersAccuracy());
+      print('Overall Kappa:', confusionMatrix.kappa());
+      
+      // Calculate the Area
+      var image = classified;
+      var bands = preset.areaCalculatedBands;
+      Map.addLayer(classified,{min: 0, max: 5, palette: ['ForestGreen', 'Blue', 'LightGreen', 'Red','Yellow','Grey' ]},'Classified');
+
+      //Export the classified image to Drive
+          Export.image.toDrive({
+            image: classified,
+            description: 'classified_2000', 
+            scale: 30,
+             region: StudyArea // Study area(Rename)
+          });
+          
+      var areaImageha = ee.Image.pixelArea().clip(preset.studyArea);
+      var areaImageha = areaImageha.multiply(0.000001);
+      
+      //print(areaImageha);
+      var classifiedArea = classified.multiply(areaImageha);
+      
+      function totalArea(title,number){
+        var type = classified.eq(number);
+        var area = type.multiply(areaImageha);
+        var total  = area.reduceRegion({
+          reducer:ee.Reducer.sum(),
+          geometry:preset.studyArea,
+          scale:500,
+          maxPixels: 1e9
+        });
+        print('Total '+title+' area, ha :',total);
+      }
+      totalArea('Mangroves',0,'ForestGreen');
+      totalArea('Water',1,'Blue');
+      totalArea('Other_vegetation',2,'LightGreen');
+      totalArea('urban',3,'Red');
+      totalArea('Cutivated_land',4,'Yellow');
+      totalArea('Baren',5,'Grey');
